@@ -48,11 +48,19 @@ def log(message: str) -> None:
     print(time.strftime("[%Y-%m-%d %H:%M:%S]"), message, flush=True)
 
 
-def make_item(clip: str, logo: str = "", item_id: str | None = None) -> dict[str, str]:
+def make_item(
+    clip: str,
+    logo: str = "",
+    item_id: str | None = None,
+    tc_som: str = "",
+    tc_dur: str = "",
+) -> dict[str, str]:
     return {
         "id": item_id or str(uuid.uuid4()),
         "clip": clip.strip(),
         "logo": logo.strip(),
+        "tc_som": tc_som.strip(),
+        "tc_dur": tc_dur.strip(),
     }
 
 
@@ -65,6 +73,8 @@ def normalize_item(raw: dict[str, Any]) -> dict[str, str]:
         clip=clip,
         logo=str(raw.get("logo", "")).strip(),
         item_id=str(raw.get("id") or uuid.uuid4()),
+        tc_som=str(raw.get("tc_som", "")).strip(),
+        tc_dur=str(raw.get("tc_dur", "")).strip(),
     )
 
 

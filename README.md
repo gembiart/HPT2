@@ -19,6 +19,17 @@ pip install -r requirements.txt
 
 `Pillow` jest używany do przygotowania logo jako pełnoekranowego PNG 1920x1080 z przezroczystym tłem. Dzięki temu małe logo nie powinno pojawiać się z czarnym tłem.
 
+Do odczytu `TC SOM` i `TC DUR` przy dodawaniu plików MXF/LXF klient używa `ffprobe`.
+`ffprobe.exe` może być w jednym z tych miejsc:
+
+1. w tym samym folderze co `caspar_playlist_client.py`,
+2. w podfolderze `ffmpeg\bin` obok klienta, np. `CasparPlaylist\ffmpeg\bin\ffprobe.exe`,
+3. w dowolnym folderze dodanym do systemowego `PATH`,
+4. w ścieżce wskazanej zmienną środowiskową `FFPROBE_PATH`.
+
+Nie musi leżeć w folderze CasparCG Server. Najprościej położyć `ffprobe.exe`
+obok pliku klienta albo dodać folder `ffmpeg\bin` do `PATH`.
+
 ## Uruchomienie
 
 Najpierw uruchom CasparCG Server i sprawdź, czy AMCP działa na porcie 5250.
@@ -60,8 +71,9 @@ Operacje są wykonywane bezpośrednio na liście:
 - `Usuń` albo klawisz `Delete` usuwa zaznaczony wiersz.
 - `W górę` / `W dół` przenosi zaznaczony wiersz.
 
-Przy `Dodaj MXF` klient bierze nazwę pliku bez rozszerzenia i wysyła do daemona
-operacje `insert_item` od pozycji po zaznaczonym wierszu.
+Przy `Dodaj MXF` klient bierze nazwę pliku bez rozszerzenia, odczytuje przez
+`ffprobe` pola `TC SOM` i `TC DUR`, a następnie wysyła do daemona operacje
+`insert_item` od pozycji po zaznaczonym wierszu.
 
 ## Format pozycji playlisty
 
@@ -71,11 +83,14 @@ Każda pozycja ma:
 {
   "id": "stale-id-pozycji",
   "clip": "BRU79145",
-  "logo": "abc_000"
+  "logo": "abc_000",
+  "tc_som": "10:00:00:00",
+  "tc_dur": "00:00:15:00"
 }
 ```
 
 `clip` i `logo` podajesz jak w AMCP, zwykle bez rozszerzenia. Pliki powinny być widoczne dla CasparCG w katalogu `media`.
+`tc_som` i `tc_dur` są metadanymi dla klienta/listy; daemon je przechowuje i odsyła, ale nie używa ich jeszcze do sterowania AMCP.
 
 ## Protokół API
 

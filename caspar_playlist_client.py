@@ -7,9 +7,12 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import socket
+import subprocess
 import tkinter as tk
 import uuid
+from fractions import Fraction
 from tkinter import filedialog, messagebox, simpledialog, ttk
 from typing import Any, Callable
 
@@ -18,12 +21,153 @@ DEFAULT_API_HOST = "127.0.0.1"
 DEFAULT_API_PORT = 8765
 
 
-def make_item(clip: str, logo: str = "", item_id: str | None = None) -> dict[str, str]:
+def make_item(
+    clip: str,
+    logo: str = "",
+    item_id: str | None = None,
+    tc_som: str = "",
+    tc_dur: str = "",
+) -> dict[str, str]:
     return {
         "id": item_id or str(uuid.uuid4()),
         "clip": clip.strip(),
         "logo": logo.strip(),
+        "tc_som": tc_som.strip(),
+        "tc_dur": tc_dur.strip(),
     }
+
+
+def find_ffprobe() -> str | None:
+    env_path = os.environ.get("FFPROBE_PATH")
+    if env_path and os.path.exists(env_path):
+        return env_path
+
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    candidates = [
+        os.path.join(script_dir, "ffprobe.exe"),
+        os.path.join(script_dir, "ffprobe"),
+        os.path.join(script_dir, "ffmpeg", "bin", "ffprobe.exe"),
+        os.path.join(script_dir, "ffmpeg", "bin", "ffprobe"),
+    ]
+
+    for candidate in candidates:
+        if os.path.exists(candidate):
+            return candidate
+
+    return shutil.which("ffprobe")
+
+
+def read_media_metadata(path: str) -> dict[str, str]:
+    ffprobe = find_ffprobe()
+    if not ffprobe:
+        raise FileNotFoundError(
+            "Nie znaleziono ffprobe. Umieść ffprobe.exe obok klienta albo dodaj folder ffmpeg/bin do PATH."
+        )
+
+    command = [
+        ffprobe,
+        "-v",
+        "error",
+        "-print_format",
+        "json",
+        "-show_format",
+        "-show_streams",
+        path,
+    ]
+    completed = subprocess.run(command, capture_output=True, text=True, check=True)
+    data = json.loads(completed.stdout or "{}")
+
+    video_stream = first_video_stream(data)
+    frame_rate = read_frame_rate(video_stream)
+    duration_seconds = read_duration_seconds(data, video_stream)
+
+    return {
+        "tc_som": read_start_timecode(data, video_stream),
+        "tc_dur": seconds_to_timecode(duration_seconds, frame_rate),
+    }
+
+
+def first_video_stream(data: dict[str, Any]) -> dict[str, Any]:
+    for stream in data.get("streams", []):
+        if stream.get("codec_type") == "video":
+            return stream
+    return {}
+
+
+def read_start_timecode(data: dict[str, Any], video_stream: dict[str, Any]) -> str:
+    for source in (
+        video_stream.get("tags", {}),
+        data.get("format", {}).get("tags", {}),
+    ):
+        for key, value in source.items():
+            if key.lower() == "timecode" and value:
+                return str(value)
+
+    for side_data in video_stream.get("side_data_list", []):
+        timecode = side_data.get("timecode")
+        if timecode:
+            return str(timecode)
+
+    return ""
+
+
+def read_frame_rate(video_stream: dict[str, Any]) -> Fraction:
+    for key in ("avg_frame_rate", "r_frame_rate"):
+        raw = str(video_stream.get(key, ""))
+        if raw and raw != "0/0":
+            try:
+                return Fraction(raw)
+            except ValueError:
+                continue
+    return Fraction(25, 1)
+
+
+def read_duration_seconds(data: dict[str, Any], video_stream: dict[str, Any]) -> float:
+    for value in (
+        video_stream.get("duration"),
+        data.get("format", {}).get("duration"),
+    ):
+        if value not in (None, "", "N/A"):
+            return float(value)
+
+    tags = data.get("format", {}).get("tags", {})
+    for key, value in tags.items():
+        if key.lower() == "duration":
+            parsed = parse_duration_tag(str(value))
+            if parsed is not None:
+                return parsed
+
+    return 0.0
+
+
+def parse_duration_tag(value: str) -> float | None:
+    parts = value.split(":")
+    if len(parts) != 3:
+        return None
+
+    try:
+        hours = int(parts[0])
+        minutes = int(parts[1])
+        seconds = float(parts[2])
+    except ValueError:
+        return None
+
+    return (hours * 3600) + (minutes * 60) + seconds
+
+
+def seconds_to_timecode(seconds: float, frame_rate: Fraction) -> str:
+    if seconds <= 0:
+        return ""
+
+    fps = max(1, round(float(frame_rate)))
+    total_frames = int(round(seconds * fps))
+    frames = total_frames % fps
+    total_seconds = total_frames // fps
+    secs = total_seconds % 60
+    total_minutes = total_seconds // 60
+    minutes = total_minutes % 60
+    hours = total_minutes // 60
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}:{frames:02d}"
 
 
 class ApiClient:
@@ -57,6 +201,8 @@ class ItemDialog(tk.Toplevel):
         title: str,
         clip: str = "",
         logo: str = "",
+        tc_som: str = "",
+        tc_dur: str = "",
         index: int = 0,
         show_index: bool = False,
     ) -> None:
@@ -68,6 +214,8 @@ class ItemDialog(tk.Toplevel):
 
         self.clip_var = tk.StringVar(value=clip)
         self.logo_var = tk.StringVar(value=logo)
+        self.tc_som_var = tk.StringVar(value=tc_som)
+        self.tc_dur_var = tk.StringVar(value=tc_dur)
         self.index_var = tk.IntVar(value=index)
 
         self._build_ui()
@@ -106,6 +254,14 @@ class ItemDialog(tk.Toplevel):
         ttk.Entry(frame, textvariable=self.logo_var, width=42).grid(row=row, column=1, sticky=tk.W, pady=4)
         row += 1
 
+        ttk.Label(frame, text="TC SOM").grid(row=row, column=0, sticky=tk.W, pady=4)
+        ttk.Entry(frame, textvariable=self.tc_som_var, width=42).grid(row=row, column=1, sticky=tk.W, pady=4)
+        row += 1
+
+        ttk.Label(frame, text="TC DUR").grid(row=row, column=0, sticky=tk.W, pady=4)
+        ttk.Entry(frame, textvariable=self.tc_dur_var, width=42).grid(row=row, column=1, sticky=tk.W, pady=4)
+        row += 1
+
         buttons = ttk.Frame(frame)
         buttons.grid(row=row, column=0, columnspan=2, sticky=tk.E, pady=(12, 0))
         ttk.Button(buttons, text="OK", command=self.ok).pack(side=tk.LEFT, padx=4)
@@ -121,7 +277,12 @@ class ItemDialog(tk.Toplevel):
 
         self.result = {
             "index": int(self.index_var.get()),
-            "item": make_item(clip=clip, logo=self.logo_var.get()),
+            "item": make_item(
+                clip=clip,
+                logo=self.logo_var.get(),
+                tc_som=self.tc_som_var.get(),
+                tc_dur=self.tc_dur_var.get(),
+            ),
         }
         self.destroy()
 
@@ -134,7 +295,7 @@ class PlaylistClientApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title("CasparCG Playlist Client")
-        self.geometry("980x620")
+        self.geometry("1160x640")
 
         self.items: list[dict[str, str]] = []
         self.current_index = -1
@@ -187,16 +348,20 @@ class PlaylistClientApp(tk.Tk):
         table_frame = ttk.Frame(list_box)
         table_frame.pack(fill=tk.BOTH, expand=True)
 
-        columns = ("index", "clip", "logo", "id")
+        columns = ("index", "clip", "logo", "tc_som", "tc_dur", "id")
         self.tree = ttk.Treeview(table_frame, columns=columns, show="headings", selectmode="browse")
         self.tree.heading("index", text="#")
         self.tree.heading("clip", text="Clip MXF/LXF")
         self.tree.heading("logo", text="Logo PNG")
+        self.tree.heading("tc_som", text="TC SOM")
+        self.tree.heading("tc_dur", text="TC DUR")
         self.tree.heading("id", text="ID")
         self.tree.column("index", width=50, anchor=tk.CENTER)
-        self.tree.column("clip", width=290)
-        self.tree.column("logo", width=240)
-        self.tree.column("id", width=320)
+        self.tree.column("clip", width=260)
+        self.tree.column("logo", width=200)
+        self.tree.column("tc_som", width=110, anchor=tk.CENTER)
+        self.tree.column("tc_dur", width=110, anchor=tk.CENTER)
+        self.tree.column("id", width=300)
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.tree.bind("<Double-1>", self.edit_selected_item)
         self.tree.bind("<Delete>", self.delete_selected_item)
@@ -280,7 +445,22 @@ class PlaylistClientApp(tk.Tk):
         try:
             for offset, path in enumerate(paths):
                 clip_name = os.path.splitext(os.path.basename(path))[0]
-                item = make_item(clip=clip_name, logo=logo)
+                try:
+                    metadata = read_media_metadata(path)
+                except Exception as exc:
+                    metadata = {"tc_som": "", "tc_dur": ""}
+                    messagebox.showwarning(
+                        "ffprobe",
+                        f"Nie udało się odczytać TC z pliku:\n{path}\n\n{exc}\n\n"
+                        "Pozycja zostanie dodana bez TC SOM / TC DUR.",
+                    )
+
+                item = make_item(
+                    clip=clip_name,
+                    logo=logo,
+                    tc_som=metadata["tc_som"],
+                    tc_dur=metadata["tc_dur"],
+                )
                 state = self.api.request(
                     "insert_item",
                     {
@@ -306,6 +486,8 @@ class PlaylistClientApp(tk.Tk):
             "Zmień pozycję",
             clip=current["clip"],
             logo=current.get("logo", ""),
+            tc_som=current.get("tc_som", ""),
+            tc_dur=current.get("tc_dur", ""),
             index=index,
             show_index=False,
         )
@@ -362,7 +544,13 @@ class PlaylistClientApp(tk.Tk):
                 data = json.load(fh)
             items = data.get("playlist", data if isinstance(data, list) else [])
             self.items = [
-                make_item(str(item["clip"]), str(item.get("logo", "")), str(item.get("id") or uuid.uuid4()))
+                make_item(
+                    str(item["clip"]),
+                    str(item.get("logo", "")),
+                    str(item.get("id") or uuid.uuid4()),
+                    str(item.get("tc_som", "")),
+                    str(item.get("tc_dur", "")),
+                )
                 for item in items
             ]
             self.render_table()
@@ -400,7 +588,13 @@ class PlaylistClientApp(tk.Tk):
 
     def apply_state(self, state: dict[str, Any]) -> None:
         self.items = [
-            make_item(str(item["clip"]), str(item.get("logo", "")), str(item.get("id") or uuid.uuid4()))
+            make_item(
+                str(item["clip"]),
+                str(item.get("logo", "")),
+                str(item.get("id") or uuid.uuid4()),
+                str(item.get("tc_som", "")),
+                str(item.get("tc_dur", "")),
+            )
             for item in state.get("playlist", [])
         ]
         self.current_index = int(state.get("current_index", -1))
@@ -422,7 +616,14 @@ class PlaylistClientApp(tk.Tk):
             self.tree.insert(
                 "",
                 tk.END,
-                values=(index, item["clip"], item.get("logo", ""), item["id"]),
+                values=(
+                    index,
+                    item["clip"],
+                    item.get("logo", ""),
+                    item.get("tc_som", ""),
+                    item.get("tc_dur", ""),
+                    item["id"],
+                ),
                 tags=tags,
             )
         self.tree.tag_configure("current", background="#d9ead3")
