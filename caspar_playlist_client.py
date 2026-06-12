@@ -10,7 +10,7 @@ import os
 import socket
 import tkinter as tk
 import uuid
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 from typing import Any, Callable
 
 
@@ -50,11 +50,91 @@ class ApiClient:
         return response.get("result") or {}
 
 
+class ItemDialog(tk.Toplevel):
+    def __init__(
+        self,
+        parent: tk.Tk,
+        title: str,
+        clip: str = "",
+        logo: str = "",
+        index: int = 0,
+        show_index: bool = False,
+    ) -> None:
+        super().__init__(parent)
+        self.title(title)
+        self.resizable(False, False)
+        self.result: dict[str, Any] | None = None
+        self.show_index = show_index
+
+        self.clip_var = tk.StringVar(value=clip)
+        self.logo_var = tk.StringVar(value=logo)
+        self.index_var = tk.IntVar(value=index)
+
+        self._build_ui()
+        self.transient(parent)
+        self.grab_set()
+        self.protocol("WM_DELETE_WINDOW", self.cancel)
+        self.bind("<Return>", lambda _event: self.ok())
+        self.bind("<Escape>", lambda _event: self.cancel())
+
+        self.update_idletasks()
+        x = parent.winfo_rootx() + (parent.winfo_width() // 2) - (self.winfo_width() // 2)
+        y = parent.winfo_rooty() + (parent.winfo_height() // 2) - (self.winfo_height() // 2)
+        self.geometry(f"+{max(0, x)}+{max(0, y)}")
+
+    def _build_ui(self) -> None:
+        frame = ttk.Frame(self, padding=12)
+        frame.pack(fill=tk.BOTH, expand=True)
+
+        row = 0
+        if self.show_index:
+            ttk.Label(frame, text="Index").grid(row=row, column=0, sticky=tk.W, pady=4)
+            ttk.Entry(frame, textvariable=self.index_var, width=10).grid(
+                row=row,
+                column=1,
+                sticky=tk.W,
+                pady=4,
+            )
+            row += 1
+
+        ttk.Label(frame, text="Clip MXF/LXF").grid(row=row, column=0, sticky=tk.W, pady=4)
+        clip_entry = ttk.Entry(frame, textvariable=self.clip_var, width=42)
+        clip_entry.grid(row=row, column=1, sticky=tk.W, pady=4)
+        row += 1
+
+        ttk.Label(frame, text="Logo PNG").grid(row=row, column=0, sticky=tk.W, pady=4)
+        ttk.Entry(frame, textvariable=self.logo_var, width=42).grid(row=row, column=1, sticky=tk.W, pady=4)
+        row += 1
+
+        buttons = ttk.Frame(frame)
+        buttons.grid(row=row, column=0, columnspan=2, sticky=tk.E, pady=(12, 0))
+        ttk.Button(buttons, text="OK", command=self.ok).pack(side=tk.LEFT, padx=4)
+        ttk.Button(buttons, text="Anuluj", command=self.cancel).pack(side=tk.LEFT)
+
+        clip_entry.focus_set()
+
+    def ok(self) -> None:
+        clip = self.clip_var.get().strip()
+        if not clip:
+            messagebox.showwarning("Brak clip", "Podaj nazwę pliku clip.", parent=self)
+            return
+
+        self.result = {
+            "index": int(self.index_var.get()),
+            "item": make_item(clip=clip, logo=self.logo_var.get()),
+        }
+        self.destroy()
+
+    def cancel(self) -> None:
+        self.result = None
+        self.destroy()
+
+
 class PlaylistClientApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title("CasparCG Playlist Client")
-        self.geometry("920x620")
+        self.geometry("980x620")
 
         self.items: list[dict[str, str]] = []
         self.current_index = -1
@@ -62,9 +142,6 @@ class PlaylistClientApp(tk.Tk):
 
         self.host_var = tk.StringVar(value=DEFAULT_API_HOST)
         self.port_var = tk.IntVar(value=DEFAULT_API_PORT)
-        self.clip_var = tk.StringVar()
-        self.logo_var = tk.StringVar()
-        self.index_var = tk.IntVar(value=0)
         self.status_var = tk.StringVar(value="Nie połączono")
 
         self._build_ui()
@@ -89,7 +166,25 @@ class PlaylistClientApp(tk.Tk):
         ttk.Button(top, text="Stop", command=self.stop_playout).pack(side=tk.LEFT, padx=4)
         ttk.Button(top, text="Stop + clear", command=lambda: self.stop_playout(clear=True)).pack(side=tk.LEFT, padx=4)
 
-        table_frame = ttk.Frame(self, padding=(8, 0, 8, 8))
+        list_box = ttk.LabelFrame(self, text="Playlista", padding=8)
+        list_box.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
+
+        list_actions = ttk.Frame(list_box)
+        list_actions.pack(fill=tk.X, pady=(0, 8))
+
+        ttk.Button(list_actions, text="Dodaj", command=self.add_item_from_list).pack(side=tk.LEFT)
+        ttk.Button(list_actions, text="Dodaj MXF", command=self.add_mxf_files).pack(side=tk.LEFT, padx=4)
+        ttk.Button(list_actions, text="Zmień", command=self.edit_selected_item).pack(side=tk.LEFT, padx=4)
+        ttk.Button(list_actions, text="Usuń", command=self.delete_selected_item).pack(side=tk.LEFT, padx=4)
+        ttk.Separator(list_actions, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=8)
+        ttk.Button(list_actions, text="W górę", command=lambda: self.move_selected(-1)).pack(side=tk.LEFT)
+        ttk.Button(list_actions, text="W dół", command=lambda: self.move_selected(1)).pack(side=tk.LEFT, padx=4)
+        ttk.Separator(list_actions, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=8)
+        ttk.Button(list_actions, text="Import JSON", command=self.import_json).pack(side=tk.LEFT)
+        ttk.Button(list_actions, text="Export JSON", command=self.export_json).pack(side=tk.LEFT, padx=4)
+        ttk.Button(list_actions, text="Wyczyść playlistę", command=self.clear_playlist).pack(side=tk.LEFT, padx=4)
+
+        table_frame = ttk.Frame(list_box)
         table_frame.pack(fill=tk.BOTH, expand=True)
 
         columns = ("index", "clip", "logo", "id")
@@ -99,41 +194,24 @@ class PlaylistClientApp(tk.Tk):
         self.tree.heading("logo", text="Logo PNG")
         self.tree.heading("id", text="ID")
         self.tree.column("index", width=50, anchor=tk.CENTER)
-        self.tree.column("clip", width=260)
-        self.tree.column("logo", width=220)
-        self.tree.column("id", width=300)
+        self.tree.column("clip", width=290)
+        self.tree.column("logo", width=240)
+        self.tree.column("id", width=320)
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        self.tree.bind("<<TreeviewSelect>>", self.on_select)
+        self.tree.bind("<Double-1>", self.edit_selected_item)
+        self.tree.bind("<Delete>", self.delete_selected_item)
 
         scrollbar = ttk.Scrollbar(table_frame, orient=tk.VERTICAL, command=self.tree.yview)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.tree.configure(yscrollcommand=scrollbar.set)
 
-        editor = ttk.LabelFrame(self, text="Edycja pozycji", padding=8)
-        editor.pack(fill=tk.X, padx=8, pady=(0, 8))
-
-        ttk.Label(editor, text="Index").grid(row=0, column=0, sticky=tk.W)
-        ttk.Entry(editor, textvariable=self.index_var, width=8).grid(row=0, column=1, padx=4)
-
-        ttk.Label(editor, text="Clip").grid(row=0, column=2, sticky=tk.W)
-        ttk.Entry(editor, textvariable=self.clip_var, width=28).grid(row=0, column=3, padx=4)
-
-        ttk.Label(editor, text="Logo").grid(row=0, column=4, sticky=tk.W)
-        ttk.Entry(editor, textvariable=self.logo_var, width=28).grid(row=0, column=5, padx=4)
-
-        ttk.Button(editor, text="Dodaj na index", command=self.insert_item).grid(row=0, column=6, padx=4)
-        ttk.Button(editor, text="Dodaj MXF", command=self.add_mxf_files).grid(row=0, column=7, padx=4)
-        ttk.Button(editor, text="Zmień zaznaczony", command=self.update_selected_item).grid(row=0, column=8, padx=4)
-        ttk.Button(editor, text="Usuń zaznaczony", command=self.delete_selected_item).grid(row=0, column=9, padx=4)
-
-        buttons = ttk.Frame(self, padding=(8, 0, 8, 8))
-        buttons.pack(fill=tk.X)
-
-        ttk.Button(buttons, text="W górę", command=lambda: self.move_selected(-1)).pack(side=tk.LEFT)
-        ttk.Button(buttons, text="W dół", command=lambda: self.move_selected(1)).pack(side=tk.LEFT, padx=4)
-        ttk.Button(buttons, text="Import JSON", command=self.import_json).pack(side=tk.LEFT, padx=12)
-        ttk.Button(buttons, text="Export JSON", command=self.export_json).pack(side=tk.LEFT)
-        ttk.Button(buttons, text="Wyczyść playlistę", command=self.clear_playlist).pack(side=tk.LEFT, padx=12)
+        hint = ttk.Label(
+            self,
+            text="Wybierz wiersz na liście. Dodaj wstawia po zaznaczonym wierszu; dwuklik zmienia pozycję; Delete usuwa.",
+            anchor=tk.W,
+            padding=(8, 0, 8, 6),
+        )
+        hint.pack(fill=tk.X)
 
         status = ttk.Label(self, textvariable=self.status_var, anchor=tk.W, padding=8)
         status.pack(fill=tk.X)
@@ -157,15 +235,23 @@ class PlaylistClientApp(tk.Tk):
     def stop_playout(self, clear: bool = False) -> None:
         self._safe_api_call("stop", {"clear": clear}, self.apply_state)
 
-    def insert_item(self) -> None:
-        clip = self.clip_var.get().strip()
-        if not clip:
-            messagebox.showwarning("Brak clip", "Podaj nazwę pliku clip.")
+    def add_item_from_list(self) -> None:
+        index = self.insert_index_after_selection()
+        dialog = ItemDialog(self, "Dodaj pozycję", index=index, show_index=True)
+        self.wait_window(dialog)
+
+        if dialog.result is None:
             return
 
-        index = max(0, min(int(self.index_var.get()), len(self.items)))
-        item = make_item(clip=clip, logo=self.logo_var.get())
-        self._safe_api_call("insert_item", {"index": index, "item": item}, self.apply_state)
+        insert_index = max(0, min(int(dialog.result["index"]), len(self.items)))
+        self._safe_api_call(
+            "insert_item",
+            {
+                "index": insert_index,
+                "item": dialog.result["item"],
+            },
+            self.apply_state,
+        )
 
     def add_mxf_files(self) -> None:
         paths = filedialog.askopenfilenames(
@@ -180,8 +266,15 @@ class PlaylistClientApp(tk.Tk):
         if not paths:
             return
 
-        index = max(0, min(int(self.index_var.get()), len(self.items)))
-        logo = self.logo_var.get()
+        logo = simpledialog.askstring(
+            "Logo",
+            "Logo PNG dla dodanych plików (opcjonalnie, bez .png):",
+            parent=self,
+        )
+        if logo is None:
+            return
+
+        index = self.insert_index_after_selection()
         state: dict[str, Any] = {}
 
         try:
@@ -201,24 +294,38 @@ class PlaylistClientApp(tk.Tk):
             self.status_var.set(f"Błąd: {exc}")
             messagebox.showerror("Błąd API", str(exc))
 
-    def update_selected_item(self) -> None:
+    def edit_selected_item(self, _event: tk.Event | None = None) -> None:
         index = self.selected_index()
         if index is None:
             messagebox.showwarning("Brak wyboru", "Zaznacz pozycję do zmiany.")
             return
 
-        clip = self.clip_var.get().strip()
-        if not clip:
-            messagebox.showwarning("Brak clip", "Podaj nazwę pliku clip.")
+        current = self.items[index]
+        dialog = ItemDialog(
+            self,
+            "Zmień pozycję",
+            clip=current["clip"],
+            logo=current.get("logo", ""),
+            index=index,
+            show_index=False,
+        )
+        self.wait_window(dialog)
+
+        if dialog.result is None:
             return
 
-        item = make_item(clip=clip, logo=self.logo_var.get(), item_id=self.items[index]["id"])
+        item = dialog.result["item"]
+        item["id"] = current["id"]
         self._safe_api_call("update_item", {"index": index, "item": item}, self.apply_state)
 
-    def delete_selected_item(self) -> None:
+    def delete_selected_item(self, _event: tk.Event | None = None) -> None:
         index = self.selected_index()
         if index is None:
             messagebox.showwarning("Brak wyboru", "Zaznacz pozycję do usunięcia.")
+            return
+
+        item = self.items[index]
+        if not messagebox.askyesno("Usuń", f"Usunąć pozycję {index}: {item['clip']}?"):
             return
 
         self._safe_api_call("delete_item", {"index": index}, self.apply_state)
@@ -279,20 +386,17 @@ class PlaylistClientApp(tk.Tk):
         except Exception as exc:
             messagebox.showerror("Export error", str(exc))
 
-    def on_select(self, _event: tk.Event) -> None:
-        index = self.selected_index()
-        if index is None:
-            return
-        item = self.items[index]
-        self.index_var.set(index)
-        self.clip_var.set(item["clip"])
-        self.logo_var.set(item.get("logo", ""))
-
     def selected_index(self) -> int | None:
         selected = self.tree.selection()
         if not selected:
             return None
         return int(self.tree.item(selected[0], "values")[0])
+
+    def insert_index_after_selection(self) -> int:
+        index = self.selected_index()
+        if index is None:
+            return len(self.items)
+        return min(index + 1, len(self.items))
 
     def apply_state(self, state: dict[str, Any]) -> None:
         self.items = [
