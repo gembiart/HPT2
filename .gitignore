@@ -1,0 +1,6 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+playlist_state.json
+playlist_state.json.tmp
