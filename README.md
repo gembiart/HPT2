@@ -47,10 +47,14 @@ python caspar_playlist_client.py
 W GUI:
 
 1. Kliknij `Połącz / odśwież`.
-2. Dodaj pozycje playlisty.
+2. Dodaj pozycje playlisty ręcznie albo przyciskiem `Dodaj MXF`.
 3. Kliknij `Wyślij całą listę`, jeśli importujesz/układasz listę lokalnie.
 4. Kliknij `Start`.
 5. Dalsze zmiany typu dodaj/usuń/zmień/przenieś są wysyłane do daemona jako pojedyncze operacje.
+
+Przycisk `Dodaj MXF` pozwala wybrać jeden lub wiele plików `.mxf` / `.lxf`.
+Klient bierze nazwę pliku bez rozszerzenia i wysyła do daemona operacje
+`insert_item` od indeksu ustawionego w polu `Index`.
 
 ## Format pozycji playlisty
 

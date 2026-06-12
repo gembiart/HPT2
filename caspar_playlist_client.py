@@ -6,6 +6,7 @@ Tkinter GUI client for the CasparCG playlist daemon.
 from __future__ import annotations
 
 import json
+import os
 import socket
 import tkinter as tk
 import uuid
@@ -121,8 +122,9 @@ class PlaylistClientApp(tk.Tk):
         ttk.Entry(editor, textvariable=self.logo_var, width=28).grid(row=0, column=5, padx=4)
 
         ttk.Button(editor, text="Dodaj na index", command=self.insert_item).grid(row=0, column=6, padx=4)
-        ttk.Button(editor, text="Zmień zaznaczony", command=self.update_selected_item).grid(row=0, column=7, padx=4)
-        ttk.Button(editor, text="Usuń zaznaczony", command=self.delete_selected_item).grid(row=0, column=8, padx=4)
+        ttk.Button(editor, text="Dodaj MXF", command=self.add_mxf_files).grid(row=0, column=7, padx=4)
+        ttk.Button(editor, text="Zmień zaznaczony", command=self.update_selected_item).grid(row=0, column=8, padx=4)
+        ttk.Button(editor, text="Usuń zaznaczony", command=self.delete_selected_item).grid(row=0, column=9, padx=4)
 
         buttons = ttk.Frame(self, padding=(8, 0, 8, 8))
         buttons.pack(fill=tk.X)
@@ -164,6 +166,40 @@ class PlaylistClientApp(tk.Tk):
         index = max(0, min(int(self.index_var.get()), len(self.items)))
         item = make_item(clip=clip, logo=self.logo_var.get())
         self._safe_api_call("insert_item", {"index": index, "item": item}, self.apply_state)
+
+    def add_mxf_files(self) -> None:
+        paths = filedialog.askopenfilenames(
+            title="Dodaj pliki MXF do playlisty",
+            filetypes=[
+                ("MXF files", "*.mxf"),
+                ("LXF files", "*.lxf"),
+                ("Video files", "*.mxf *.lxf"),
+                ("All files", "*.*"),
+            ],
+        )
+        if not paths:
+            return
+
+        index = max(0, min(int(self.index_var.get()), len(self.items)))
+        logo = self.logo_var.get()
+        state: dict[str, Any] = {}
+
+        try:
+            for offset, path in enumerate(paths):
+                clip_name = os.path.splitext(os.path.basename(path))[0]
+                item = make_item(clip=clip_name, logo=logo)
+                state = self.api.request(
+                    "insert_item",
+                    {
+                        "index": index + offset,
+                        "item": item,
+                    },
+                )
+            self.apply_state(state)
+            self.status_var.set(f"Dodano plików MXF/LXF: {len(paths)}")
+        except Exception as exc:
+            self.status_var.set(f"Błąd: {exc}")
+            messagebox.showerror("Błąd API", str(exc))
 
     def update_selected_item(self) -> None:
         index = self.selected_index()
