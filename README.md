@@ -70,6 +70,7 @@ Operacje są wykonywane bezpośrednio na liście:
 - `Zmień` albo dwuklik na wierszu otwiera okno zmiany pozycji.
 - `Usuń` albo klawisz `Delete` usuwa zaznaczony wiersz.
 - `W górę` / `W dół` przenosi zaznaczony wiersz.
+- aktualnie odgrywany wiersz jest oznaczony czerwonym tłem i czarnym tekstem.
 
 Przy `Dodaj MXF` klient bierze nazwę pliku bez rozszerzenia, odczytuje przez
 `ffprobe` pola `TC SOM` i `TC DUR`, a następnie wysyła do daemona operacje
@@ -246,3 +247,14 @@ Daemon robi:
 5. Zmiany z GUI aktualizują kolejkę w daemonie. Jeśli usuniesz pozycję o indeksie 10, daemon usuwa ją ze swojej kolejki. Jeśli dodasz pozycję na indeks 20, daemon wstawia ją w tym miejscu.
 
 Uwaga: jeśli ten sam plik występuje kilka razy pod rząd, CasparCG w `INFO` zwykle pokazuje tylko nazwę pliku, więc idealne rozróżnienie dwóch identycznych sąsiednich pozycji nie zawsze jest możliwe. Najbezpieczniej używać różnych nazw plików albo nie układać identycznych plików bezpośrednio jeden po drugim.
+
+## Logi portów
+
+Daemon pokazuje kierunek ruchu z adresami i portami:
+
+```text
+API RECV 127.0.0.1:54000 -> 127.0.0.1:8765: action=insert_item id=...
+API SEND 127.0.0.1:8765 -> 127.0.0.1:54000: ok=True id=...
+AMCP SEND 127.0.0.1:53012 -> 127.0.0.1:5250: PLAY 1-10 "BRU79145" MIX 50
+AMCP RECV 127.0.0.1:5250 -> 127.0.0.1:53012: 202 PLAY OK
+```

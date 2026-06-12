@@ -48,6 +48,12 @@ def log(message: str) -> None:
     print(time.strftime("[%Y-%m-%d %H:%M:%S]"), message, flush=True)
 
 
+def format_endpoint(endpoint: Any) -> str:
+    if isinstance(endpoint, tuple) and len(endpoint) >= 2:
+        return f"{endpoint[0]}:{endpoint[1]}"
+    return str(endpoint)
+
+
 def make_item(
     clip: str,
     logo: str = "",
@@ -132,14 +138,35 @@ class AmcpClient:
     def _connect(self) -> socket.socket:
         if self._sock is None:
             self._sock = socket.create_connection((self.host, self.port), timeout=5)
+            log(f"AMCP CONNECT {self._route(self._sock)}")
         return self._sock
+
+    def _route(self, sock: socket.socket) -> str:
+        try:
+            local = format_endpoint(sock.getsockname())
+        except OSError:
+            local = "unknown-local"
+
+        try:
+            remote = format_endpoint(sock.getpeername())
+        except OSError:
+            remote = f"{self.host}:{self.port}"
+
+        return f"{local} -> {remote}"
+
+    def _reverse_route(self, sock: socket.socket) -> str:
+        route = self._route(sock)
+        if " -> " not in route:
+            return route
+        local, remote = route.split(" -> ", 1)
+        return f"{remote} -> {local}"
 
     def command(self, command: str, timeout: float = 0.5) -> str:
         with self._lock:
             for attempt in range(2):
                 try:
                     sock = self._connect()
-                    log(f"AMCP SEND: {command}")
+                    log(f"AMCP SEND {self._route(sock)}: {command}")
                     sock.sendall((command + "\r\n").encode("utf-8"))
                     sock.settimeout(timeout)
                     chunks: list[bytes] = []
@@ -155,7 +182,7 @@ class AmcpClient:
 
                     response = b"".join(chunks).decode("utf-8", errors="ignore")
                     if response.strip():
-                        log(f"AMCP RECV: {response.strip()}")
+                        log(f"AMCP RECV {self._reverse_route(sock)}: {response.strip()}")
                     return response
                 except OSError:
                     self.close()
@@ -564,18 +591,27 @@ class ApiHandler(socketserver.StreamRequestHandler):
     controller: PlaylistController
 
     def handle(self) -> None:
-        peer = self.client_address[0]
-        log(f"API client connected: {peer}")
+        peer = format_endpoint(self.client_address)
+        local = format_endpoint(self.request.getsockname())
+        log(f"API CONNECT {peer} -> {local}")
         for raw_line in self.rfile:
+            request_id = None
             try:
                 request = json.loads(raw_line.decode("utf-8"))
+                request_id = request.get("id")
+                log(
+                    f"API RECV {peer} -> {local}: "
+                    f"action={request.get('action')} id={request_id}"
+                )
                 response = self.server.dispatch(request)  # type: ignore[attr-defined]
             except Exception as exc:
                 response = {
                     "ok": False,
+                    "id": request_id,
                     "error": str(exc),
                 }
 
+            log(f"API SEND {local} -> {peer}: ok={response.get('ok')} id={response.get('id')}")
             self.wfile.write((json.dumps(response, ensure_ascii=False) + "\n").encode("utf-8"))
             self.wfile.flush()
 

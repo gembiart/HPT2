@@ -626,7 +626,7 @@ class PlaylistClientApp(tk.Tk):
                 ),
                 tags=tags,
             )
-        self.tree.tag_configure("current", background="#d9ead3")
+        self.tree.tag_configure("current", background="#ff0000", foreground="#000000")
 
         if selected_index is not None and 0 <= selected_index < len(self.items):
             row_id = self.tree.get_children()[selected_index]
